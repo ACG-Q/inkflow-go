@@ -1,0 +1,71 @@
+import type { ApiResponse, PageData, TemplateListItem, Template, SigningRecord, FontItem, AdminStats, HandwritingConfig } from '@/types'
+
+const BASE = '/api'
+
+async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const token = localStorage.getItem('token')
+  const headers: Record<string, string> = {
+    ...(options?.headers as Record<string, string>),
+  }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  if (!(options?.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json'
+  }
+  const res = await fetch(`${BASE}${url}`, { ...options, headers })
+  return res.json()
+}
+
+export const api = {
+  login: (data: { username: string; password: string }) =>
+    request<ApiResponse<{ token: string }>>('/auth/login', {
+      method: 'POST', body: JSON.stringify(data),
+    }),
+  me: () => request<ApiResponse<{ username: string }>>('/auth/me'),
+
+  listTemplates: (params?: string) =>
+    request<ApiResponse<PageData<TemplateListItem>>>(`/templates?${params || ''}`),
+  createTemplate: (name: string) =>
+    request<ApiResponse<{ id: number }>>('/templates', {
+      method: 'POST', body: JSON.stringify({ name }),
+    }),
+  getTemplate: (id: number) => request<ApiResponse<Template>>(`/templates/${id}`),
+  updateTemplate: (id: number, data: any) =>
+    request<ApiResponse<null>>(`/templates/${id}`, {
+      method: 'PUT', body: JSON.stringify(data),
+    }),
+  deleteTemplate: (id: number) =>
+    request<ApiResponse<null>>(`/templates/${id}`, { method: 'DELETE' }),
+  uploadTemplateFile: (id: number, file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request<ApiResponse<{ bg_image: string }>>(`/templates/${id}/upload`, {
+      method: 'POST', body: fd,
+    })
+  },
+
+  listRecords: (params?: string) =>
+    request<ApiResponse<PageData<SigningRecord>>>(`/records?${params || ''}`),
+  deleteRecord: (id: number) =>
+    request<ApiResponse<null>>(`/records/${id}`, { method: 'DELETE' }),
+
+  listFonts: () => request<ApiResponse<FontItem[]>>('/fonts'),
+  deleteFont: (id: number) =>
+    request<ApiResponse<null>>(`/fonts/${id}`, { method: 'DELETE' }),
+
+  importTemplate: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return request<ApiResponse<{ id: number; name: string }>>('/templates/import', {
+      method: 'POST', body: fd,
+    })
+  },
+
+  getStats: () => request<ApiResponse<AdminStats>>('/admin/stats'),
+
+  getHandwritingSettings: () =>
+    request<ApiResponse<HandwritingConfig>>('/settings/handwriting'),
+  updateHandwritingSettings: (data: HandwritingConfig) =>
+    request<ApiResponse<null>>('/settings/handwriting', {
+      method: 'PUT', body: JSON.stringify(data),
+    }),
+}
