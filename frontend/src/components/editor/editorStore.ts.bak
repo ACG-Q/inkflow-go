@@ -166,14 +166,13 @@ export const useEditorStore = defineStore('editor', () => {
       }
       if (templateId.value) {
         body.name = name.value
-        const res = await api.updateTemplate(templateId.value, body)
-        if (res.code !== 0) throw new Error(res.message)
+        await api.updateTemplate(templateId.value, body)
       } else {
         const res = await api.createTemplate(name.value)
-        if (res.code !== 0) throw new Error(res.message)
-        templateId.value = res.data.id
-        const updateRes = await api.updateTemplate(templateId.value, body)
-        if (updateRes.code !== 0) throw new Error(updateRes.message)
+        if (res.code === 0) {
+          templateId.value = res.data.id
+          await api.updateTemplate(templateId.value, body)
+        }
       }
       dirty.value = false
     } finally {

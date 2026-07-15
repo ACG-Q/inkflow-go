@@ -25,6 +25,11 @@
         <p>点击管理后台"创建新模板"来开启您的第一个协议。</p>
       </div>
     </div>
+    <div v-if="totalPages > 1" class="pagination">
+      <button :disabled="currentPage <= 1" @click="goPage(currentPage - 1)">上一页</button>
+      <span>{{ currentPage }} / {{ totalPages }}</span>
+      <button :disabled="currentPage >= totalPages" @click="goPage(currentPage + 1)">下一页</button>
+    </div>
   </div>
 </template>
 
@@ -38,10 +43,21 @@ const templates = ref<TemplateListItem[]>([])
 const auth = useAuthStore()
 const isLoggedIn = computed(() => auth.isAuthenticated)
 const deletingId = ref<number | null>(null)
+const currentPage = ref(1)
+const totalPages = ref(1)
+const pageSize = 12
 
 async function load() {
-  const res = await api.listTemplates()
-  if (res.code === 0) templates.value = res.data.items
+  const res = await api.listTemplates({ page: currentPage.value, page_size: pageSize })
+  if (res.code === 0) {
+    templates.value = res.data.items
+    totalPages.value = Math.ceil(res.data.total / res.data.page_size)
+  }
+}
+
+function goPage(p: number) {
+  currentPage.value = p
+  load()
 }
 
 function formatDate(d: string) {
@@ -111,4 +127,21 @@ onMounted(load)
 }
 .empty h2 { margin: 8px 0 4px; }
 .empty p { margin: 0; }
+.pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+  padding: 16px 0;
+}
+.pagination button {
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  cursor: pointer;
+  font-size: 13px;
+}
+.pagination button:disabled { opacity: 0.4; cursor: not-allowed; }
 </style>
