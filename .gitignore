@@ -25,11 +25,8 @@ vendor/
 Thumbs.db
 
 # Project specific
-data/output/
-data/bg_images/*.png
-data/bg_images/*.jpg
-data/fonts/*.ttf
-data/fonts/*.otf
+data/
+dist/
 
 # Frontend build artifacts
 frontend/dist/
