@@ -30,3 +30,7 @@ data/bg_images/*.png
 data/bg_images/*.jpg
 data/fonts/*.ttf
 data/fonts/*.otf
+
+# Frontend build artifacts
+frontend/dist/
+frontend/node_modules/
