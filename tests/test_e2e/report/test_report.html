@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>inkflow-go E2E 测试报告</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f5f5;color:#333;line-height:1.6}
+.container{max-width:1200px;margin:0 auto;padding:20px}
+header{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:30px;border-radius:10px;margin-bottom:30px}
+header h1{font-size:24px;margin-bottom:10px}
+header .meta{opacity:.9;font-size:14px}
+.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:30px}
+.summary-card{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1);text-align:center}
+.summary-card .number{font-size:36px;font-weight:700}
+.summary-card .label{color:#666;font-size:14px}
+.summary-card.pass .number{color:#22c55e}
+.summary-card.fail .number{color:#ef4444}
+.summary-card.total .number{color:#3b82f6}
+.test-list{background:#fff;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1);overflow:hidden;margin-bottom:30px}
+.test-list h2{padding:15px 20px;border-bottom:1px solid #eee;font-size:16px}
+.test-item{padding:12px 20px;border-bottom:1px solid #eee;display:flex;align-items:center}
+.test-item:last-child{border-bottom:none}
+.test-item .status{width:52px;height:24px;border-radius:4px;margin-right:15px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff;flex-shrink:0}
+.test-item .status.pass{background:#22c55e}
+.test-item .status.fail{background:#ef4444}
+.test-item .name{flex:1;font-size:14px}
+.test-item .error{color:#ef4444;font-size:12px;margin-top:4px}
+.screenshots{margin-bottom:30px}
+.screenshots h2{margin-bottom:20px;font-size:16px}
+.screenshot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:20px}
+.screenshot-card{background:#fff;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,.1);overflow:hidden}
+.screenshot-card img{width:100%;height:auto;display:block}
+.screenshot-card .caption{padding:10px 15px;background:#f8f9fa;font-size:13px;color:#555}
+footer{text-align:center;padding:20px;color:#888;font-size:13px}
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+<h1>inkflow-go E2E 测试报告</h1>
+<div class="meta">
+<div>生成时间: 2026-07-14 20:23:46</div>
+<div>测试环境: http://localhost:8080</div>
+</div>
+</header>
+<div class="summary">
+<div class="summary-card total"><div class="number">22</div><div class="label">总测试数</div></div>
+<div class="summary-card pass"><div class="number">22</div><div class="label">通过</div></div>
+<div class="summary-card fail"><div class="number">0</div><div class="label">失败</div></div>
+</div>
+<div class="test-list">
+<h2>测试详情</h2>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">01_auth_login</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">02_template_create</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">03_template_upload_bg</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">04_template_get</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">05_template_update_name</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">06_controls_add</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">07_rules_add</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">08_handwriting_global</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">09_handwriting_template</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">10_sign_with_override</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">11_records_list</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">12_template_delete</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">13_fonts_list</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">14_stats</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">15_page_home</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">16_page_admin_dashboard</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">17_page_admin_editor</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">18_page_admin_settings</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">19_page_admin_fonts</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">20_page_admin_records</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">21_page_sign_front</div></div>
+<div class="test-item"><div class="status pass">PASS</div><div class="name">22_sign_modal_open</div></div>
+
+</div>
+<div class="screenshots">
+<h2>截图记录</h2>
+<div class="screenshot-grid">
+<div class="screenshot-card"><img src="screenshots/15_home.png" alt="首页" loading="lazy"><div class="caption">首页</div></div>
+<div class="screenshot-card"><img src="screenshots/16_admin_dashboard.png" alt="管理后台-仪表盘" loading="lazy"><div class="caption">管理后台-仪表盘</div></div>
+<div class="screenshot-card"><img src="screenshots/17_admin_editor.png" alt="管理后台-编辑器" loading="lazy"><div class="caption">管理后台-编辑器</div></div>
+<div class="screenshot-card"><img src="screenshots/17b_editor_hw_modal.png" alt="编辑器-手写效果弹窗" loading="lazy"><div class="caption">编辑器-手写效果弹窗</div></div>
+<div class="screenshot-card"><img src="screenshots/18_admin_settings.png" alt="管理后台-全局设置" loading="lazy"><div class="caption">管理后台-全局设置</div></div>
+<div class="screenshot-card"><img src="screenshots/19_admin_fonts.png" alt="管理后台-字体管理" loading="lazy"><div class="caption">管理后台-字体管理</div></div>
+<div class="screenshot-card"><img src="screenshots/20_admin_records.png" alt="管理后台-签署记录" loading="lazy"><div class="caption">管理后台-签署记录</div></div>
+<div class="screenshot-card"><img src="screenshots/21_sign_front.png" alt="签名页" loading="lazy"><div class="caption">签名页</div></div>
+<div class="screenshot-card"><img src="screenshots/22_sign_hw_modal.png" alt="签名页-手写效果弹窗" loading="lazy"><div class="caption">签名页-手写效果弹窗</div></div>
+
+</div>
+</div>
+<footer>inkflow-go E2E Test Report</footer>
+</div>
+</body>
+</html>

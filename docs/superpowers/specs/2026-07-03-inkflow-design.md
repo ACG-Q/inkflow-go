@@ -140,8 +140,8 @@ data/
 
 - admins.password 使用 bcrypt 哈希存储，绝不存明文
 - 首次启动自动检测：无管理员 → 尝试环境变量 `ADMIN_PASSWORD` → 若空则生成随机密码打印到控制台
-- 命令行初始化：`inkflow.exe init --password=<password>`
-- JWT 密钥：首次启动自动生成，写入 `data/.jwt_secret`
+- 命令行初始化：`inkflow.exe init <password>`
+- JWT 密钥：未设置 `JWT_SECRET` 环境变量时自动生成 32 字节随机密钥（仅存内存，重启后旧 token 失效）
 
 ### 查询规范
 

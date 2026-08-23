@@ -1,0 +1,779 @@
+package handlers
+
+import (
+	"archive/zip"
+	"bytes"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"inkflow-go/internal/core"
+	"inkflow-go/internal/models"
+)
+
+func ListTemplatesHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+		keyword := c.Query("keyword")
+		if page < 1 {
+			page = 1
+		}
+		if pageSize < 1 || pageSize > 100 {
+			pageSize = 20
+		}
+		offset := (page - 1) * pageSize
+
+		var total int64
+		countSQL := "SELECT COUNT(*) FROM templates WHERE deleted_at IS NULL"
+		args := []interface{}{}
+		if keyword != "" {
+			countSQL += " AND name LIKE ?"
+			args = append(args, "%"+keyword+"%")
+		}
+		db.QueryRow(countSQL, args...).Scan(&total)
+
+		dataSQL := "SELECT id, name, created_at FROM templates WHERE deleted_at IS NULL"
+		if keyword != "" {
+			dataSQL += " AND name LIKE ?"
+		}
+		dataSQL += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+		queryArgs := make([]interface{}, len(args))
+		copy(queryArgs, args)
+		queryArgs = append(queryArgs, pageSize, offset)
+
+		rows, err := db.Query(dataSQL, queryArgs...)
+		if err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		defer rows.Close()
+
+		items := []models.TemplateListItem{}
+		for rows.Next() {
+			var item models.TemplateListItem
+			rows.Scan(&item.ID, &item.Name, &item.CreatedAt)
+			items = append(items, item)
+		}
+		if err := rows.Err(); err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		Page(c, items, total, page, pageSize)
+	}
+}
+
+func CreateTemplateHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Name       string                     `json:"name"`
+			Handwriting *models.HandwritingConfig `json:"handwriting"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Error(c, http.StatusBadRequest, 40001, "参数校验失败")
+			return
+		}
+		if req.Name == "" {
+			req.Name = "未命名模板"
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		defer tx.Rollback()
+
+		result, err := tx.Exec("INSERT INTO templates (name) VALUES (?)", req.Name)
+		if err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		id, _ := result.LastInsertId()
+
+		hw := models.DefaultHandwriting()
+		if req.Handwriting != nil {
+			hw = hw.Merge(*req.Handwriting)
+		}
+		if _, err := tx.Exec(`INSERT INTO template_handwriting
+			(template_id, font_family, paper_enabled, paper_opacity, fiber_count, dot_count,
+			 global_tilt, baseline_drift, char_jitter, char_rotation,
+			 ink_opacity_min, ink_opacity_max, char_spacing,
+			 ink_spots_enabled, ink_spots_chance, ink_spots_max,
+			 shadow_blur, checkbox_enabled)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, hw.FontFamily,
+			boolToInt(hw.PaperEnabled), hw.PaperOpacity, hw.FiberCount, hw.DotCount,
+			hw.GlobalTilt, hw.BaselineDrift, hw.CharJitter, hw.CharRotation,
+			hw.InkOpacityMin, hw.InkOpacityMax, hw.CharSpacing,
+			boolToInt(hw.InkSpotsEnabled), hw.InkSpotsChance, hw.InkSpotsMax,
+			hw.ShadowBlur, boolToInt(hw.CheckboxEnabled)); err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		Success(c, gin.H{"id": id})
+	}
+}
+
+func GetTemplateHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			Error(c, http.StatusBadRequest, 40001, "参数校验失败")
+			return
+		}
+		var t models.Template
+		err = db.QueryRow("SELECT id, name, COALESCE(bg_image,''), width, height, created_at FROM templates WHERE id = ? AND deleted_at IS NULL", id).
+			Scan(&t.ID, &t.Name, &t.BgImage, &t.Width, &t.Height, &t.CreatedAt)
+		if err == sql.ErrNoRows {
+			Error(c, http.StatusNotFound, 40003, "资源不存在")
+			return
+		}
+		if err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+
+		result := models.TemplateWithHandwriting{Template: t}
+
+		result.Controls = queryControls(db, id)
+		if result.Controls == nil {
+			result.Controls = []models.Control{}
+		}
+
+		result.Rules = queryRules(db, id)
+
+		result.Handwriting = queryHandwriting(db, id)
+
+		Success(c, result)
+	}
+}
+
+func UpdateTemplateHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			Error(c, http.StatusBadRequest, 40001, "参数校验失败")
+			return
+		}
+		var req struct {
+			Name        *string                    `json:"name"`
+			BgImage     *string                    `json:"bg_image"`
+			Width       *int                       `json:"width"`
+			Height      *int                       `json:"height"`
+			Controls    *[]models.ControlRow       `json:"controls"`
+			Rules       *[]models.RuleRow          `json:"rules"`
+			Handwriting *models.HandwritingConfig  `json:"handwriting"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			Error(c, http.StatusBadRequest, 40001, "参数校验失败")
+			return
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		defer tx.Rollback()
+
+		setClauses := []string{}
+		args := []interface{}{}
+		if req.Name != nil {
+			setClauses = append(setClauses, "name=?")
+			args = append(args, *req.Name)
+		}
+		if req.BgImage != nil {
+			setClauses = append(setClauses, "bg_image=?")
+			args = append(args, *req.BgImage)
+		}
+		if req.Width != nil {
+			setClauses = append(setClauses, "width=?")
+			args = append(args, *req.Width)
+		}
+		if req.Height != nil {
+			setClauses = append(setClauses, "height=?")
+			args = append(args, *req.Height)
+		}
+		if len(setClauses) > 0 {
+			sqlStr := "UPDATE templates SET " + strings.Join(setClauses, ", ") + " WHERE id=? AND deleted_at IS NULL"
+			args = append(args, id)
+			if _, err := tx.Exec(sqlStr, args...); err != nil {
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+		}
+
+		if req.Controls != nil {
+			if _, err := tx.Exec("DELETE FROM template_controls WHERE template_id=?", id); err != nil {
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+			for i, ctl := range *req.Controls {
+				ctl.TemplateID = id
+				ctl.SortOrder = i
+				if _, err := tx.Exec(`INSERT INTO template_controls
+					(id, template_id, label, type, x, y, width, height, font_size, font_family, required, preview_text, check_size, sort_order)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					ctl.ID, ctl.TemplateID, ctl.Label, ctl.Type, ctl.X, ctl.Y, ctl.Width, ctl.Height,
+					ctl.FontSize, ctl.FontFamily, boolToInt(&ctl.Required), ctl.PreviewText, ctl.CheckSize, ctl.SortOrder); err != nil {
+					Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+					return
+				}
+			}
+		}
+
+		if req.Rules != nil {
+			if _, err := tx.Exec("DELETE FROM template_rules WHERE template_id=?", id); err != nil {
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+			for i, rule := range *req.Rules {
+				rule.TemplateID = id
+				rule.SortOrder = i
+				configJSON := "{}"
+				if rule.Config != nil {
+					b, _ := json.Marshal(rule.Config)
+					configJSON = string(b)
+				}
+				if _, err := tx.Exec(`INSERT INTO template_rules (id, template_id, type, name, target, config_json, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					rule.ID, rule.TemplateID, rule.Type, rule.Name, rule.Target, configJSON, rule.SortOrder); err != nil {
+					Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+					return
+				}
+			}
+		}
+
+		if req.Handwriting != nil {
+			// Read existing handwriting and merge with incoming values
+			existing := models.DefaultHandwriting()
+			var ef string
+			var ep float64; var epo float64; var efc, edc float64
+			var egt, ebd, ecj, ecr, eimn, eimx, ecs, eisc, esc, esm, esb, ecb float64
+			err := tx.QueryRow(`SELECT COALESCE(font_family,'sans-serif'), paper_enabled, paper_opacity, fiber_count, dot_count,
+				global_tilt, baseline_drift, char_jitter, char_rotation,
+				ink_opacity_min, ink_opacity_max, char_spacing,
+				ink_spots_enabled, ink_spots_chance, ink_spots_max,
+				shadow_blur, checkbox_enabled
+				FROM template_handwriting WHERE template_id=?`, id).Scan(
+				&ef, &ep, &epo, &efc, &edc,
+				&egt, &ebd, &ecj, &ecr, &eimn, &eimx, &ecs, &eisc, &esc, &esm, &esb, &ecb)
+			if err == nil {
+				existing.FontFamily = models.SP(ef)
+				bp := ep != 0; existing.PaperEnabled = &bp
+				existing.PaperOpacity = models.FP(epo)
+				existing.FiberCount = models.IP(int(efc))
+				existing.DotCount = models.IP(int(edc))
+				existing.GlobalTilt = models.FP(egt)
+				existing.BaselineDrift = models.FP(ebd)
+				existing.CharJitter = models.FP(ecj)
+				existing.CharRotation = models.FP(ecr)
+				existing.InkOpacityMin = models.FP(eimn)
+				existing.InkOpacityMax = models.FP(eimx)
+				existing.CharSpacing = models.FP(ecs)
+				existing.InkSpotsEnabled = boolPtr(int(eisc))
+				existing.InkSpotsChance = models.FP(esc)
+				existing.InkSpotsMax = models.IP(int(esm))
+				existing.ShadowBlur = models.FP(esb)
+				existing.CheckboxEnabled = boolPtr(int(ecb))
+			}
+			hw := existing.Merge(*req.Handwriting)
+			// Try UPDATE first; if no row exists, INSERT
+			res, updErr := tx.Exec(`UPDATE template_handwriting SET
+				font_family=?, paper_enabled=?, paper_opacity=?, fiber_count=?, dot_count=?,
+				global_tilt=?, baseline_drift=?, char_jitter=?, char_rotation=?,
+				ink_opacity_min=?, ink_opacity_max=?, char_spacing=?,
+				ink_spots_enabled=?, ink_spots_chance=?, ink_spots_max=?,
+				shadow_blur=?, checkbox_enabled=?, updated_at=CURRENT_TIMESTAMP
+				WHERE template_id=?`,
+				hw.FontFamily,
+				boolToInt(hw.PaperEnabled), hw.PaperOpacity, hw.FiberCount, hw.DotCount,
+				hw.GlobalTilt, hw.BaselineDrift, hw.CharJitter, hw.CharRotation,
+				hw.InkOpacityMin, hw.InkOpacityMax, hw.CharSpacing,
+				boolToInt(hw.InkSpotsEnabled), hw.InkSpotsChance, hw.InkSpotsMax,
+				hw.ShadowBlur, boolToInt(hw.CheckboxEnabled), id)
+			if updErr != nil {
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+			affected, _ := res.RowsAffected()
+			if affected == 0 {
+				if _, err := tx.Exec(`INSERT INTO template_handwriting
+					(template_id, font_family, paper_enabled, paper_opacity, fiber_count, dot_count,
+					 global_tilt, baseline_drift, char_jitter, char_rotation,
+					 ink_opacity_min, ink_opacity_max, char_spacing,
+					 ink_spots_enabled, ink_spots_chance, ink_spots_max,
+					 shadow_blur, checkbox_enabled)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					id, hw.FontFamily,
+					boolToInt(hw.PaperEnabled), hw.PaperOpacity, hw.FiberCount, hw.DotCount,
+					hw.GlobalTilt, hw.BaselineDrift, hw.CharJitter, hw.CharRotation,
+					hw.InkOpacityMin, hw.InkOpacityMax, hw.CharSpacing,
+					boolToInt(hw.InkSpotsEnabled), hw.InkSpotsChance, hw.InkSpotsMax,
+					hw.ShadowBlur, boolToInt(hw.CheckboxEnabled)); err != nil {
+					Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+					return
+				}
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		Success(c, nil)
+	}
+}
+
+func DeleteTemplateHandler(db *sql.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			Error(c, http.StatusBadRequest, 40001, "参数校验失败")
+			return
+		}
+		result, err := db.Exec("UPDATE templates SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL", id)
+		if err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		if rows, _ := result.RowsAffected(); rows == 0 {
+			Error(c, http.StatusNotFound, 40003, "资源不存在")
+			return
+		}
+		Success(c, nil)
+	}
+}
+
+func UploadTemplateFileHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			Error(c, http.StatusBadRequest, 40001, "参数校验失败")
+			return
+		}
+		var exists int
+		db.QueryRow("SELECT COUNT(*) FROM templates WHERE id = ? AND deleted_at IS NULL", id).Scan(&exists)
+		if exists == 0 {
+			Error(c, http.StatusNotFound, 40003, "资源不存在")
+			return
+		}
+		file, header, err := c.Request.FormFile("file")
+		if err != nil {
+			Error(c, http.StatusBadRequest, 40001, "参数校验失败")
+			return
+		}
+		defer file.Close()
+
+		ext := strings.ToLower(filepath.Ext(header.Filename))
+		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".pdf" {
+			Error(c, http.StatusBadRequest, 40002, "文件格式不支持")
+			return
+		}
+
+		dir := filepath.Join(bgImageDir, fmt.Sprintf("%d", id))
+		os.MkdirAll(dir, 0755)
+
+		if ext == ".pdf" {
+			tmpPath := filepath.Join(dir, "_tmp_upload.pdf")
+			tmp, err := os.Create(tmpPath)
+			if err != nil {
+				Error(c, http.StatusInternalServerError, 50002, "文件写入失败")
+				return
+			}
+			if _, err := io.Copy(tmp, file); err != nil {
+				tmp.Close()
+				os.Remove(tmpPath)
+				Error(c, http.StatusInternalServerError, 50002, "文件写入失败")
+				return
+			}
+			tmp.Close()
+
+			outDir := filepath.Join(dir, "pages")
+			os.MkdirAll(outDir, 0755)
+			images, err := core.PDFToImages(tmpPath, outDir)
+			os.Remove(tmpPath)
+			if err != nil {
+				Error(c, http.StatusInternalServerError, 50003, "PDF 转换失败")
+				return
+			}
+			if len(images) == 0 {
+				Error(c, http.StatusInternalServerError, 50003, "PDF 转换失败: 无页面")
+				return
+			}
+
+			bgRelPath := fmt.Sprintf("bg_images/%d/pages/page_1.png", id)
+			if _, err := db.Exec("UPDATE templates SET bg_image = ? WHERE id = ?", bgRelPath, id); err != nil {
+				os.RemoveAll(outDir)
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+			Success(c, gin.H{"bg_image": bgRelPath, "all_pages": images})
+		} else {
+			outPath := filepath.Join(dir, fmt.Sprintf("bg%s", ext))
+			out, err := os.Create(outPath)
+			if err != nil {
+				Error(c, http.StatusInternalServerError, 50002, "文件写入失败")
+				return
+			}
+			if _, err := io.Copy(out, file); err != nil {
+				out.Close()
+				os.Remove(outPath)
+				Error(c, http.StatusInternalServerError, 50002, "文件写入失败")
+				return
+			}
+			out.Close()
+
+			bgRelPath := fmt.Sprintf("bg_images/%d/bg%s", id, ext)
+			if _, err := db.Exec("UPDATE templates SET bg_image = ? WHERE id = ?", bgRelPath, id); err != nil {
+				os.Remove(outPath)
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+			Success(c, gin.H{"bg_image": bgRelPath})
+		}
+	}
+}
+
+func ExportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil {
+			Error(c, http.StatusBadRequest, 40001, "参数校验失败")
+			return
+		}
+		var t models.Template
+		err = db.QueryRow("SELECT id, name, COALESCE(bg_image,''), width, height, created_at FROM templates WHERE id = ? AND deleted_at IS NULL", id).
+			Scan(&t.ID, &t.Name, &t.BgImage, &t.Width, &t.Height, &t.CreatedAt)
+		if err == sql.ErrNoRows {
+			Error(c, http.StatusNotFound, 40003, "资源不存在")
+			return
+		}
+		if err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+
+		controls := queryControls(db, id)
+		rules := queryRules(db, id)
+		hw := queryHandwriting(db, id)
+
+		buf := new(bytes.Buffer)
+		w := zip.NewWriter(buf)
+
+		exportData := map[string]interface{}{
+			"export_version": "2.0",
+			"exported_at":    time.Now().UTC().Format(time.RFC3339),
+			"template": map[string]interface{}{
+				"name":      t.Name,
+				"bg_image":  t.BgImage,
+				"width":     t.Width,
+				"height":    t.Height,
+				"controls":  controls,
+				"rules":     rules,
+			},
+		}
+		if hw != nil {
+			exportData["handwriting"] = hw
+		}
+		exportJSON, _ := json.MarshalIndent(exportData, "", "  ")
+		f, _ := w.Create("template.json")
+		f.Write(exportJSON)
+
+		if t.BgImage != "" {
+			bgPath := filepath.Join(bgImageDir, t.BgImage)
+			if _, err := os.Stat(bgPath); err == nil {
+				bgData, err := os.ReadFile(bgPath)
+				if err == nil {
+					bgEntry, _ := w.Create("bg_image/" + filepath.Base(t.BgImage))
+					bgEntry.Write(bgData)
+				}
+			}
+		}
+
+		w.Close()
+
+		safeName := strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+				return r
+			}
+			return '_'
+		}, t.Name)
+		if safeName == "" {
+			safeName = "template"
+		}
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s_%d.zip\"", safeName, id))
+		c.Data(http.StatusOK, "application/zip", buf.Bytes())
+	}
+}
+
+func ImportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		file, header, err := c.Request.FormFile("file")
+		if err != nil {
+			Error(c, http.StatusBadRequest, 40001, "参数校验失败")
+			return
+		}
+		defer file.Close()
+
+		if !strings.HasSuffix(strings.ToLower(header.Filename), ".zip") {
+			Error(c, http.StatusBadRequest, 40002, "仅支持 ZIP 文件导入")
+			return
+		}
+
+		zipReader, err := zip.NewReader(file, header.Size)
+		if err != nil {
+			Error(c, http.StatusBadRequest, 40002, "无效的 ZIP 文件")
+			return
+		}
+
+		var templateJSON []byte
+		var bgImageData []byte
+		var bgImageName string
+
+		for _, f := range zipReader.File {
+			if f.Name == "template.json" {
+				rc, err := f.Open()
+				if err != nil {
+					Error(c, http.StatusInternalServerError, 50002, "ZIP 读取失败")
+					return
+				}
+				templateJSON, _ = io.ReadAll(rc)
+				rc.Close()
+			} else if strings.HasPrefix(f.Name, "bg_image/") && !strings.HasSuffix(f.Name, "/") {
+				rc, err := f.Open()
+				if err != nil {
+					continue
+				}
+				bgImageData, _ = io.ReadAll(rc)
+				rc.Close()
+				bgImageName = filepath.Base(f.Name)
+			}
+		}
+
+		if templateJSON == nil {
+			Error(c, http.StatusBadRequest, 40002, "ZIP 中未找到 template.json")
+			return
+		}
+
+		var exportData map[string]interface{}
+		if err := json.Unmarshal(templateJSON, &exportData); err != nil {
+			Error(c, http.StatusBadRequest, 40002, "template.json 格式无效")
+			return
+		}
+
+		tmplData, ok := exportData["template"].(map[string]interface{})
+		if !ok {
+			tmplData = exportData
+		}
+
+		name, _ := tmplData["name"].(string)
+		if name == "" {
+			name = "导入的模板"
+		}
+		width := 800
+		if v, ok := tmplData["width"].(float64); ok {
+			width = int(v)
+		}
+		height := 1000
+		if v, ok := tmplData["height"].(float64); ok {
+			height = int(v)
+		}
+
+		var controls []models.Control
+		if controlsRaw, ok := tmplData["controls"].([]interface{}); ok {
+			for _, c := range controlsRaw {
+				if cm, ok := c.(map[string]interface{}); ok {
+					ctl := models.Control{}
+					if v, ok := cm["id"].(string); ok {
+						ctl.ID = v
+					}
+					if v, ok := cm["label"].(string); ok {
+						ctl.Label = v
+					}
+					if v, ok := cm["type"].(string); ok {
+						ctl.Type = v
+					}
+					if v, ok := cm["x"].(float64); ok {
+						ctl.X = v
+					}
+					if v, ok := cm["y"].(float64); ok {
+						ctl.Y = v
+					}
+					if v, ok := cm["width"].(float64); ok {
+						ctl.Width = v
+					}
+					if v, ok := cm["height"].(float64); ok {
+						ctl.Height = v
+					}
+					if v, ok := cm["font_size"].(float64); ok {
+						ctl.FontSize = int(v)
+					}
+					if v, ok := cm["font_family"].(string); ok {
+						ctl.FontFamily = v
+					}
+					if v, ok := cm["required"].(bool); ok {
+						ctl.Required = v
+					}
+					if v, ok := cm["preview_text"].(string); ok {
+						ctl.PreviewText = v
+					}
+					controls = append(controls, ctl)
+				}
+			}
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		defer tx.Rollback()
+
+		var bgImageURL string
+		if len(bgImageData) > 0 && bgImageName != "" {
+			bgDir := filepath.Join(bgImageDir, "imported")
+			os.MkdirAll(bgDir, 0755)
+			bgPath := filepath.Join(bgDir, bgImageName)
+			if err := os.WriteFile(bgPath, bgImageData, 0644); err == nil {
+				bgImageURL = "bg_images/imported/" + bgImageName
+			}
+		}
+
+		result, err := tx.Exec("INSERT INTO templates (name, width, height, bg_image) VALUES (?, ?, ?, ?)",
+			name, width, height, bgImageURL)
+		if err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		tmplID, _ := result.LastInsertId()
+
+		hw := models.DefaultHandwriting()
+		if _, err := tx.Exec(`INSERT INTO template_handwriting
+			(template_id, font_family, paper_enabled, paper_opacity, fiber_count, dot_count,
+			 global_tilt, baseline_drift, char_jitter, char_rotation,
+			 ink_opacity_min, ink_opacity_max, char_spacing,
+			 ink_spots_enabled, ink_spots_chance, ink_spots_max,
+			 shadow_blur, checkbox_enabled)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			tmplID, hw.FontFamily,
+			boolToInt(hw.PaperEnabled), hw.PaperOpacity, hw.FiberCount, hw.DotCount,
+			hw.GlobalTilt, hw.BaselineDrift, hw.CharJitter, hw.CharRotation,
+			hw.InkOpacityMin, hw.InkOpacityMax, hw.CharSpacing,
+			boolToInt(hw.InkSpotsEnabled), hw.InkSpotsChance, hw.InkSpotsMax,
+			hw.ShadowBlur, boolToInt(hw.CheckboxEnabled)); err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+
+		for i, ctl := range controls {
+			if _, err := tx.Exec(`INSERT INTO template_controls
+				(id, template_id, label, type, x, y, width, height, font_size, font_family, required, preview_text, check_size, sort_order)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				ctl.ID, tmplID, ctl.Label, ctl.Type, ctl.X, ctl.Y, ctl.Width, ctl.Height,
+				ctl.FontSize, ctl.FontFamily, boolToInt(&ctl.Required), ctl.PreviewText, ctl.CheckSize, i); err != nil {
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+			return
+		}
+		Success(c, gin.H{"id": tmplID, "name": name})
+	}
+}
+
+func queryControls(db *sql.DB, templateID int64) []models.Control {
+	rows, err := db.Query(`SELECT id, label, type, x, y, width, height, font_size, font_family, required, preview_text, check_size
+		FROM template_controls WHERE template_id=? ORDER BY sort_order`, templateID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var controls []models.Control
+	for rows.Next() {
+		var c models.Control
+		var required int
+		if err := rows.Scan(&c.ID, &c.Label, &c.Type, &c.X, &c.Y, &c.Width, &c.Height, &c.FontSize, &c.FontFamily, &required, &c.PreviewText, &c.CheckSize); err != nil {
+			continue
+		}
+		c.Required = required == 1
+		controls = append(controls, c)
+	}
+	return controls
+}
+
+func queryRules(db *sql.DB, templateID int64) []models.RuleRow {
+	rows, err := db.Query(`SELECT id, type, name, target, config_json
+		FROM template_rules WHERE template_id=? ORDER BY sort_order`, templateID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var rules []models.RuleRow
+	for rows.Next() {
+		var r models.RuleRow
+		if err := rows.Scan(&r.ID, &r.Type, &r.Name, &r.Target, &r.ConfigJSON); err != nil {
+			continue
+		}
+		var config interface{}
+		if r.ConfigJSON != "" && r.ConfigJSON != "{}" {
+			json.Unmarshal([]byte(r.ConfigJSON), &config)
+		}
+		r.Config = config
+		rules = append(rules, r)
+	}
+	return rules
+}
+
+func queryHandwriting(db *sql.DB, templateID int64) *models.HandwritingConfig {
+	var hw models.HandwritingConfig
+	var paperEnabled, inkSpotsEnabled, checkboxEnabled int
+	err := db.QueryRow(`SELECT font_family, paper_enabled, paper_opacity, fiber_count, dot_count,
+		global_tilt, baseline_drift, char_jitter, char_rotation,
+		ink_opacity_min, ink_opacity_max, char_spacing,
+		ink_spots_enabled, ink_spots_chance, ink_spots_max,
+		shadow_blur, checkbox_enabled
+		FROM template_handwriting WHERE template_id=?`, templateID).
+		Scan(&hw.FontFamily, &paperEnabled, &hw.PaperOpacity, &hw.FiberCount, &hw.DotCount,
+			&hw.GlobalTilt, &hw.BaselineDrift, &hw.CharJitter, &hw.CharRotation,
+			&hw.InkOpacityMin, &hw.InkOpacityMax, &hw.CharSpacing,
+			&inkSpotsEnabled, &hw.InkSpotsChance, &hw.InkSpotsMax,
+			&hw.ShadowBlur, &checkboxEnabled)
+	if err != nil {
+		return nil
+	}
+	t1 := paperEnabled == 1
+	t2 := inkSpotsEnabled == 1
+	t3 := checkboxEnabled == 1
+	hw.PaperEnabled = &t1
+	hw.InkSpotsEnabled = &t2
+	hw.CheckboxEnabled = &t3
+	return &hw
+}
+
+func boolToInt(b *bool) int {
+	if b != nil && *b {
+		return 1
+	}
+	return 0
+}
+
+func boolPtr(v int) *bool {
+	b := v != 0
+	return &b
+}
