@@ -494,12 +494,57 @@ func ExportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 
 		if t.BgImage != "" {
 			bgPath := filepath.Join(bgImageDir, t.BgImage)
+			if _, err := os.Stat(bgPath); os.IsNotExist(err) {
+				bgPath = filepath.Join(bgImageDir, strings.TrimPrefix(t.BgImage, "bg_images/"))
+			}
 			if _, err := os.Stat(bgPath); err == nil {
 				bgData, err := os.ReadFile(bgPath)
 				if err == nil {
 					bgEntry, _ := w.Create("bg_image/" + filepath.Base(t.BgImage))
 					bgEntry.Write(bgData)
 				}
+			}
+		}
+
+		fontFamilies := make(map[string]bool)
+		for _, ctl := range controls {
+			if ctl.FontFamily != "" {
+				fontFamilies[ctl.FontFamily] = true
+			}
+		}
+
+		if len(fontFamilies) > 0 {
+			fontsDir := filepath.Dir(bgImageDir)
+			fontsDir = filepath.Join(fontsDir, "fonts")
+			var fontsMeta []map[string]interface{}
+			rows, err := db.Query("SELECT id, filename, display_name, original_filename FROM fonts WHERE deleted_at IS NULL")
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var f models.Font
+					if err := rows.Scan(&f.ID, &f.Filename, &f.DisplayName, &f.OriginalFilename); err != nil {
+						continue
+					}
+					if !fontFamilies[f.DisplayName] {
+						continue
+					}
+					fontPath := filepath.Join(fontsDir, f.Filename)
+					if fontData, err := os.ReadFile(fontPath); err == nil {
+						fontEntry, _ := w.Create("fonts/" + f.Filename)
+						fontEntry.Write(fontData)
+					}
+					fontsMeta = append(fontsMeta, map[string]interface{}{
+						"id":                f.ID,
+						"filename":          f.Filename,
+						"display_name":      f.DisplayName,
+						"original_filename": f.OriginalFilename,
+					})
+				}
+			}
+			if len(fontsMeta) > 0 {
+				fontsJSON, _ := json.MarshalIndent(fontsMeta, "", "  ")
+				ff, _ := w.Create("fonts.json")
+				ff.Write(fontsJSON)
 			}
 		}
 
@@ -542,6 +587,8 @@ func ImportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 		var templateJSON []byte
 		var bgImageData []byte
 		var bgImageName string
+		var fontsData map[string][]byte
+		var fontsMetaJSON []byte
 
 		for _, f := range zipReader.File {
 			if f.Name == "template.json" {
@@ -560,6 +607,24 @@ func ImportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 				bgImageData, _ = io.ReadAll(rc)
 				rc.Close()
 				bgImageName = filepath.Base(f.Name)
+			} else if strings.HasPrefix(f.Name, "fonts/") && !strings.HasSuffix(f.Name, "/") {
+				if fontsData == nil {
+					fontsData = make(map[string][]byte)
+				}
+				rc, err := f.Open()
+				if err != nil {
+					continue
+				}
+				data, _ := io.ReadAll(rc)
+				rc.Close()
+				fontsData[filepath.Base(f.Name)] = data
+			} else if f.Name == "fonts.json" {
+				rc, err := f.Open()
+				if err != nil {
+					continue
+				}
+				fontsMetaJSON, _ = io.ReadAll(rc)
+				rc.Close()
 			}
 		}
 
@@ -630,7 +695,45 @@ func ImportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 					if v, ok := cm["preview_text"].(string); ok {
 						ctl.PreviewText = v
 					}
+					if v, ok := cm["check_size"].(float64); ok {
+						ctl.CheckSize = int(v)
+					}
 					controls = append(controls, ctl)
+				}
+			}
+		}
+
+		type ImportedRule struct {
+			ID         string      `json:"id"`
+			Type       string      `json:"type"`
+			Name       string      `json:"name"`
+			Target     string      `json:"target"`
+			ConfigJSON string      `json:"-"`
+			Config     interface{} `json:"config"`
+		}
+		var rules []ImportedRule
+		if rulesRaw, ok := tmplData["rules"].([]interface{}); ok {
+			for _, r := range rulesRaw {
+				if rm, ok := r.(map[string]interface{}); ok {
+					ir := ImportedRule{}
+					if v, ok := rm["id"].(string); ok {
+						ir.ID = v
+					}
+					if v, ok := rm["type"].(string); ok {
+						ir.Type = v
+					}
+					if v, ok := rm["name"].(string); ok {
+						ir.Name = v
+					}
+					if v, ok := rm["target"].(string); ok {
+						ir.Target = v
+					}
+					if cfg, ok := rm["config"]; ok {
+						cfgJSON, _ := json.Marshal(cfg)
+						ir.ConfigJSON = string(cfgJSON)
+						ir.Config = cfg
+					}
+					rules = append(rules, ir)
 				}
 			}
 		}
@@ -661,6 +764,62 @@ func ImportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 		tmplID, _ := result.LastInsertId()
 
 		hw := models.DefaultHandwriting()
+		if hwRaw, ok := exportData["handwriting"].(map[string]interface{}); ok {
+			if v, ok := hwRaw["font_family"].(string); ok {
+				hw.FontFamily = &v
+			}
+			if v, ok := hwRaw["paper_enabled"].(bool); ok {
+				hw.PaperEnabled = &v
+			}
+			if v, ok := hwRaw["paper_opacity"].(float64); ok {
+				hw.PaperOpacity = &v
+			}
+			if v, ok := hwRaw["fiber_count"].(float64); ok {
+				n := int(v)
+				hw.FiberCount = &n
+			}
+			if v, ok := hwRaw["dot_count"].(float64); ok {
+				n := int(v)
+				hw.DotCount = &n
+			}
+			if v, ok := hwRaw["global_tilt"].(float64); ok {
+				hw.GlobalTilt = &v
+			}
+			if v, ok := hwRaw["baseline_drift"].(float64); ok {
+				hw.BaselineDrift = &v
+			}
+			if v, ok := hwRaw["char_jitter"].(float64); ok {
+				hw.CharJitter = &v
+			}
+			if v, ok := hwRaw["char_rotation"].(float64); ok {
+				hw.CharRotation = &v
+			}
+			if v, ok := hwRaw["ink_opacity_min"].(float64); ok {
+				hw.InkOpacityMin = &v
+			}
+			if v, ok := hwRaw["ink_opacity_max"].(float64); ok {
+				hw.InkOpacityMax = &v
+			}
+			if v, ok := hwRaw["char_spacing"].(float64); ok {
+				hw.CharSpacing = &v
+			}
+			if v, ok := hwRaw["ink_spots_enabled"].(bool); ok {
+				hw.InkSpotsEnabled = &v
+			}
+			if v, ok := hwRaw["ink_spots_chance"].(float64); ok {
+				hw.InkSpotsChance = &v
+			}
+			if v, ok := hwRaw["ink_spots_max"].(float64); ok {
+				n := int(v)
+				hw.InkSpotsMax = &n
+			}
+			if v, ok := hwRaw["shadow_blur"].(float64); ok {
+				hw.ShadowBlur = &v
+			}
+			if v, ok := hwRaw["checkbox_enabled"].(bool); ok {
+				hw.CheckboxEnabled = &v
+			}
+		}
 		if _, err := tx.Exec(`INSERT INTO template_handwriting
 			(template_id, font_family, paper_enabled, paper_opacity, fiber_count, dot_count,
 			 global_tilt, baseline_drift, char_jitter, char_rotation,
@@ -689,11 +848,61 @@ func ImportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 			}
 		}
 
+		for i, rule := range rules {
+			if _, err := tx.Exec(`INSERT INTO template_rules
+				(id, template_id, type, name, target, config_json, sort_order)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				rule.ID, tmplID, rule.Type, rule.Name, rule.Target, rule.ConfigJSON, i); err != nil {
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+		}
+
+		fontsDir := filepath.Dir(bgImageDir)
+		fontsDir = filepath.Join(fontsDir, "fonts")
+		if len(fontsData) > 0 {
+			os.MkdirAll(fontsDir, 0755)
+		}
+		var importedFonts []map[string]interface{}
+		if len(fontsMetaJSON) > 0 {
+			var fontsMeta []map[string]interface{}
+			if json.Unmarshal(fontsMetaJSON, &fontsMeta) == nil {
+				for _, fm := range fontsMeta {
+					filename, _ := fm["filename"].(string)
+					displayName, _ := fm["display_name"].(string)
+					origName, _ := fm["original_filename"].(string)
+					if filename == "" || displayName == "" {
+						continue
+					}
+					if fontData, ok := fontsData[filename]; ok {
+						fontPath := filepath.Join(fontsDir, filename)
+						os.WriteFile(fontPath, fontData, 0644)
+					}
+					var existingID int64
+					err := tx.QueryRow("SELECT id FROM fonts WHERE display_name=? AND deleted_at IS NULL", displayName).Scan(&existingID)
+					if err == sql.ErrNoRows {
+						res, err := tx.Exec("INSERT INTO fonts (filename, display_name, original_filename) VALUES (?, ?, ?)",
+							filename, displayName, origName)
+						if err == nil {
+							newID, _ := res.LastInsertId()
+							importedFonts = append(importedFonts, map[string]interface{}{
+								"id": newID, "display_name": displayName,
+							})
+						}
+					} else if err == nil {
+						importedFonts = append(importedFonts, map[string]interface{}{
+							"id": existingID, "display_name": displayName,
+						})
+					}
+				}
+			}
+		}
+
 		if err := tx.Commit(); err != nil {
 			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
 			return
 		}
-		Success(c, gin.H{"id": tmplID, "name": name})
+		Success(c, gin.H{"id": tmplID, "name": name, "imported_fonts": len(importedFonts)})
 	}
 }
 
