@@ -28,6 +28,9 @@ Thumbs.db
 data/
 dist/
 
+# go-winres generated
+*.syso
+
 # Frontend build artifacts
 frontend/dist/
 frontend/node_modules/

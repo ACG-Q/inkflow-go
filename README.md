@@ -1,6 +1,10 @@
-# Inkflow (墨流)
+<p align="center">
+  <img src="docs/logo.svg" alt="Inkflow Logo" width="128" />
+</p>
 
-轻量级协议签署系统。单二进制部署，内嵌前端，开箱即用。
+<h1 align="center">Inkflow (墨流)</h1>
+
+<p align="center">轻量级协议签署系统。单二进制部署，内嵌前端，开箱即用。</p>
 
 ## 功能
 
