@@ -15,9 +15,37 @@ jobs:
     strategy:
       matrix:
         include:
+          # Linux amd64
           - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
             output: inkflow-linux-amd64
+          # Linux arm64 (aarch64) - Raspberry Pi 4+ (64-bit), AWS Graviton, etc.
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            output: inkflow-linux-arm64
+          # Linux armv7 (32-bit) - Raspberry Pi 2/3/4, Orange Pi, etc.
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm
+            goarm: '7'
+            output: inkflow-linux-armv7
+          # Linux armv6 - Raspberry Pi Zero/1
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm
+            goarm: '6'
+            output: inkflow-linux-armv6
+          # Linux 386 (x86 32-bit)
+          - os: ubuntu-latest
+            goos: linux
+            goarch: '386'
+            output: inkflow-linux-386
+          # Windows amd64
           - os: windows-latest
+            goos: windows
+            goarch: amd64
             output: inkflow-windows-amd64.exe
     runs-on: ${{ matrix.os }}
     steps:
@@ -44,6 +72,10 @@ jobs:
         shell: bash
 
       - name: Build Go backend
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
         run: go build -ldflags="-s -w" -o dist/${{ matrix.output }} .
 
       - name: Upload artifact
@@ -68,4 +100,8 @@ jobs:
           generate_release_notes: true
           files: |
             dist/inkflow-linux-amd64/inkflow-linux-amd64
+            dist/inkflow-linux-arm64/inkflow-linux-arm64
+            dist/inkflow-linux-armv7/inkflow-linux-armv7
+            dist/inkflow-linux-armv6/inkflow-linux-armv6
+            dist/inkflow-linux-386/inkflow-linux-386
             dist/inkflow-windows-amd64.exe/inkflow-windows-amd64.exe
