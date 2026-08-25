@@ -24,7 +24,7 @@ func Load() *Config {
 		RateLimit:   60,
 		LogLevel:    "info",
 		LogFormat:   "text",
-		CorsOrigins: "*",
+		CorsOrigins: "",
 	}
 	if v := os.Getenv("PORT"); v != "" {
 		cfg.Port, _ = strconv.Atoi(v)

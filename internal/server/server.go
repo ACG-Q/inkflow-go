@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,6 +41,10 @@ func Run(cfg *config.Config, frontendFS embed.FS) error {
 
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
+
+	if cfg.CorsOrigins != "" {
+		r.Use(corsMiddleware(cfg.CorsOrigins))
+	}
 
 	r.Static("/static/bg_images", cfg.BgImageDir())
 	r.Static("/static/output", cfg.OutputDir())
@@ -83,7 +88,7 @@ func Run(cfg *config.Config, frontendFS embed.FS) error {
 			auth.PUT("/templates/:id", handlers.UpdateTemplateHandler(database.DB))
 			auth.DELETE("/templates/:id", handlers.DeleteTemplateHandler(database.DB))
 			auth.POST("/templates/:id/upload", handlers.UploadTemplateFileHandler(database.DB, cfg.BgImageDir()))
-			auth.GET("/templates/:id/export", handlers.ExportTemplateHandler(database.DB, cfg.BgImageDir()))
+			auth.GET("/templates/:id/export", handlers.ExportTemplateHandler(database.DB, cfg.BgImageDir(), cfg.FontsDir()))
 			auth.POST("/templates/import", handlers.ImportTemplateHandler(database.DB, cfg.BgImageDir()))
 			auth.GET("/records", handlers.ListRecordsHandler(database.DB))
 			auth.DELETE("/records/:id", handlers.DeleteRecordHandler(database.DB))
@@ -181,4 +186,43 @@ func setupLogging(cfg *config.Config) {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	}
 	slog.SetDefault(slog.New(handler))
+}
+
+func corsMiddleware(allowedOrigins string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		origin := c.GetHeader("Origin")
+		if origin == "" {
+			c.Next()
+			return
+		}
+
+		allowed := false
+		if allowedOrigins == "*" {
+			c.Header("Access-Control-Allow-Origin", "*")
+			allowed = true
+		} else {
+			for _, a := range strings.Split(allowedOrigins, ",") {
+				if strings.TrimSpace(a) == origin {
+					c.Header("Access-Control-Allow-Origin", origin)
+					allowed = true
+					break
+				}
+			}
+		}
+
+		if !allowed {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+
+		if c.Request.Method == "OPTIONS" {
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			c.Header("Access-Control-Max-Age", "86400")
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	}
 }

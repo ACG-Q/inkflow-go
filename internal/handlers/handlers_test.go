@@ -358,7 +358,7 @@ func TestExportTemplate(t *testing.T) {
 	c.Params = gin.Params{{Key: "id", Value: "1"}}
 	c.Request = httptest.NewRequest("GET", "/api/templates/1/export", nil)
 
-	ExportTemplateHandler(db, "")(c)
+	ExportTemplateHandler(db, "", "")(c)
 
 	if w.Code != 200 {
 		t.Errorf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -373,7 +373,7 @@ func TestExportTemplateNotFound(t *testing.T) {
 	c.Params = gin.Params{{Key: "id", Value: "999"}}
 	c.Request = httptest.NewRequest("GET", "/api/templates/999/export", nil)
 
-	ExportTemplateHandler(db, "")(c)
+	ExportTemplateHandler(db, "", "")(c)
 
 	if w.Code != 404 {
 		t.Errorf("expected 404, got %d: %s", w.Code, w.Body.String())

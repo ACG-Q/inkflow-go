@@ -67,9 +67,9 @@ inkflow [flags] [command]
   -s <jwt_secret>     JWT 密钥
   -l <log_level>      日志级别: debug/info/warn/error (默认: info)
   -r <rate_limit>     速率限制 (默认: 60 req/min)
-  --cors <origins>    CORS 允许来源
-  --tls-cert <path>   TLS 证书路径
-  --tls-key <path>    TLS 私钥路径
+  -cors <origins>     CORS 允许来源
+  -tls-cert <path>    TLS 证书路径
+  -tls-key <path>     TLS 私钥路径
 ```
 
 ### 示例
@@ -79,7 +79,7 @@ inkflow                            # 默认启动
 inkflow -p 9090                    # 指定端口
 inkflow -p 9090 -d /data           # 指定端口和数据目录
 inkflow -s mysecret -l debug       # 自定义 JWT 密钥和日志级别
-inkflow --tls-cert cert.pem --tls-key key.pem  # 启用 HTTPS
+inkflow -tls-cert cert.pem -tls-key key.pem  # 启用 HTTPS
 inkflow init mypassword            # 初始化管理员
 ```
 
@@ -95,7 +95,7 @@ inkflow init mypassword            # 初始化管理员
 | `RATE_LIMIT` | 速率限制 | `60` |
 | `LOG_LEVEL` | 日志级别 | `info` |
 | `LOG_FORMAT` | 日志格式 (text/json) | `text` |
-| `CORS_ORIGINS` | CORS 来源 | `*` |
+| `CORS_ORIGINS` | CORS 来源 | 同源 (空) |
 | `TLS_CERT` | TLS 证书路径 | 空 |
 | `TLS_KEY` | TLS 私钥路径 | 空 |
 

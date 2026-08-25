@@ -447,7 +447,7 @@ func UploadTemplateFileHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 	}
 }
 
-func ExportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
+func ExportTemplateHandler(db *sql.DB, bgImageDir string, fontsDir string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
@@ -493,13 +493,9 @@ func ExportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 		f.Write(exportJSON)
 
 		if t.BgImage != "" {
-			bgPath := filepath.Join(bgImageDir, t.BgImage)
-			if _, err := os.Stat(bgPath); os.IsNotExist(err) {
-				bgPath = filepath.Join(bgImageDir, strings.TrimPrefix(t.BgImage, "bg_images/"))
-			}
-			if _, err := os.Stat(bgPath); err == nil {
-				bgData, err := os.ReadFile(bgPath)
-				if err == nil {
+			bgPath := resolveBgPath(bgImageDir, t.BgImage)
+			if bgPath != "" {
+				if bgData, err := os.ReadFile(bgPath); err == nil {
 					bgEntry, _ := w.Create("bg_image/" + filepath.Base(t.BgImage))
 					bgEntry.Write(bgData)
 				}
@@ -514,8 +510,6 @@ func ExportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 		}
 
 		if len(fontFamilies) > 0 {
-			fontsDir := filepath.Dir(bgImageDir)
-			fontsDir = filepath.Join(fontsDir, "fonts")
 			var fontsMeta []map[string]interface{}
 			rows, err := db.Query("SELECT id, filename, display_name, original_filename FROM fonts WHERE deleted_at IS NULL")
 			if err == nil {
@@ -904,6 +898,29 @@ func ImportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 		}
 		Success(c, gin.H{"id": tmplID, "name": name, "imported_fonts": len(importedFonts)})
 	}
+}
+
+// resolveBgPath resolves the background image path from DB value and bgImageDir.
+// DB stores paths like "bg_images/1/pages/page_1.png", bgImageDir is "./data/bg_images".
+func resolveBgPath(bgImageDir, dbPath string) string {
+	// Try direct join first (works if dbPath is relative like "1/pages/page_1.png")
+	direct := filepath.Join(bgImageDir, dbPath)
+	if _, err := os.Stat(direct); err == nil {
+		return direct
+	}
+	// Strip "bg_images/" prefix and join with bgImageDir
+	stripped := strings.TrimPrefix(dbPath, "bg_images/")
+	if stripped != dbPath {
+		alt := filepath.Join(bgImageDir, stripped)
+		if _, err := os.Stat(alt); err == nil {
+			return alt
+		}
+	}
+	// Try absolute path (dbPath might be stored as absolute)
+	if _, err := os.Stat(dbPath); err == nil {
+		return dbPath
+	}
+	return ""
 }
 
 func queryControls(db *sql.DB, templateID int64) []models.Control {
