@@ -79,6 +79,7 @@ func Run(cfg *config.Config, frontendFS embed.FS) error {
 		api.GET("/templates", handlers.ListTemplatesHandler(database.DB))
 		api.GET("/templates/:id", handlers.GetTemplateHandler(database.DB))
 		api.GET("/records/:id", handlers.GetRecordHandler(database.DB))
+		api.GET("/fonts", handlers.ListFontsHandler(database.DB))
 
 		auth := api.Group("")
 		auth.Use(handlers.AuthRequired())
@@ -92,7 +93,6 @@ func Run(cfg *config.Config, frontendFS embed.FS) error {
 			auth.POST("/templates/import", handlers.ImportTemplateHandler(database.DB, cfg.BgImageDir()))
 			auth.GET("/records", handlers.ListRecordsHandler(database.DB))
 			auth.DELETE("/records/:id", handlers.DeleteRecordHandler(database.DB))
-			auth.GET("/fonts", handlers.ListFontsHandler(database.DB))
 			auth.POST("/fonts", handlers.CreateFontHandler(database.DB, cfg.FontsDir()))
 			auth.POST("/fonts/batch", handlers.CreateFontsBatchHandler(database.DB, cfg.FontsDir()))
 			auth.PUT("/fonts/:id", handlers.UpdateFontHandler(database.DB))
