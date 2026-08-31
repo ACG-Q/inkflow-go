@@ -749,13 +749,35 @@ func ImportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 			}
 		}
 
-		result, err := tx.Exec("INSERT INTO templates (name, width, height, bg_image) VALUES (?, ?, ?, ?)",
-			name, width, height, bgImageURL)
-		if err != nil {
+		var tmplID int64
+		// Check if template with same name already exists
+		var existingID int64
+		err = tx.QueryRow("SELECT id FROM templates WHERE name = ? AND deleted_at IS NULL", name).Scan(&existingID)
+		if err == sql.ErrNoRows {
+			// Template name doesn't exist, create new
+			result, err := tx.Exec("INSERT INTO templates (name, width, height, bg_image) VALUES (?, ?, ?, ?)",
+				name, width, height, bgImageURL)
+			if err != nil {
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+			tmplID, _ = result.LastInsertId()
+		} else if err == nil {
+			// Template name exists, update existing template
+			tmplID = existingID
+			if _, err := tx.Exec("UPDATE templates SET width=?, height=?, bg_image=? WHERE id=?",
+				width, height, bgImageURL, tmplID); err != nil {
+				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+				return
+			}
+			// Clear existing controls, rules, and handwriting for this template
+			tx.Exec("DELETE FROM template_controls WHERE template_id=?", tmplID)
+			tx.Exec("DELETE FROM template_rules WHERE template_id=?", tmplID)
+			tx.Exec("DELETE FROM template_handwriting WHERE template_id=?", tmplID)
+		} else {
 			Error(c, http.StatusInternalServerError, 50001, "数据库错误")
 			return
 		}
-		tmplID, _ := result.LastInsertId()
 
 		hw := models.DefaultHandwriting()
 		if hwRaw, ok := exportData["handwriting"].(map[string]interface{}); ok {
@@ -832,23 +854,64 @@ func ImportTemplateHandler(db *sql.DB, bgImageDir string) gin.HandlerFunc {
 		}
 
 		for i, ctl := range controls {
-			if _, err := tx.Exec(`INSERT INTO template_controls
-				(id, template_id, label, type, x, y, width, height, font_size, font_family, required, preview_text, check_size, sort_order)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				ctl.ID, tmplID, ctl.Label, ctl.Type, ctl.X, ctl.Y, ctl.Width, ctl.Height,
-				ctl.FontSize, ctl.FontFamily, boolToInt(&ctl.Required), ctl.PreviewText, ctl.CheckSize, i); err != nil {
+			// Use UPSERT: check if control with same ID exists for this template
+			var ctlExists int
+			err := tx.QueryRow("SELECT COUNT(*) FROM template_controls WHERE id=? AND template_id=?", ctl.ID, tmplID).Scan(&ctlExists)
+			if err != nil {
 				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
 				return
+			}
+			if ctlExists > 0 {
+				// Update existing control
+				if _, err := tx.Exec(`UPDATE template_controls
+					SET label=?, type=?, x=?, y=?, width=?, height=?, font_size=?, font_family=?, required=?, preview_text=?, check_size=?, sort_order=?
+					WHERE id=? AND template_id=?`,
+					ctl.Label, ctl.Type, ctl.X, ctl.Y, ctl.Width, ctl.Height,
+					ctl.FontSize, ctl.FontFamily, boolToInt(&ctl.Required), ctl.PreviewText, ctl.CheckSize, i,
+					ctl.ID, tmplID); err != nil {
+					Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+					return
+				}
+			} else {
+				// Insert new control
+				if _, err := tx.Exec(`INSERT INTO template_controls
+					(id, template_id, label, type, x, y, width, height, font_size, font_family, required, preview_text, check_size, sort_order)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					ctl.ID, tmplID, ctl.Label, ctl.Type, ctl.X, ctl.Y, ctl.Width, ctl.Height,
+					ctl.FontSize, ctl.FontFamily, boolToInt(&ctl.Required), ctl.PreviewText, ctl.CheckSize, i); err != nil {
+					Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+					return
+				}
 			}
 		}
 
 		for i, rule := range rules {
-			if _, err := tx.Exec(`INSERT INTO template_rules
-				(id, template_id, type, name, target, config_json, sort_order)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				rule.ID, tmplID, rule.Type, rule.Name, rule.Target, rule.ConfigJSON, i); err != nil {
+			// Use UPSERT: check if rule with same ID exists for this template
+			var ruleExists int
+			err := tx.QueryRow("SELECT COUNT(*) FROM template_rules WHERE id=? AND template_id=?", rule.ID, tmplID).Scan(&ruleExists)
+			if err != nil {
 				Error(c, http.StatusInternalServerError, 50001, "数据库错误")
 				return
+			}
+			if ruleExists > 0 {
+				// Update existing rule
+				if _, err := tx.Exec(`UPDATE template_rules
+					SET type=?, name=?, target=?, config_json=?, sort_order=?
+					WHERE id=? AND template_id=?`,
+					rule.Type, rule.Name, rule.Target, rule.ConfigJSON, i,
+					rule.ID, tmplID); err != nil {
+					Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+					return
+				}
+			} else {
+				// Insert new rule
+				if _, err := tx.Exec(`INSERT INTO template_rules
+					(id, template_id, type, name, target, config_json, sort_order)
+					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					rule.ID, tmplID, rule.Type, rule.Name, rule.Target, rule.ConfigJSON, i); err != nil {
+					Error(c, http.StatusInternalServerError, 50001, "数据库错误")
+					return
+				}
 			}
 		}
 
