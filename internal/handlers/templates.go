@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -544,17 +545,22 @@ func ExportTemplateHandler(db *sql.DB, bgImageDir string, fontsDir string) gin.H
 
 		w.Close()
 
-		safeName := strings.Map(func(r rune) rune {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-				return r
-			}
-			return '_'
-		}, t.Name)
-		if safeName == "" {
-			safeName = "template"
+	asciiName := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			return r
 		}
-		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s_%d.zip\"", safeName, id))
-		c.Data(http.StatusOK, "application/zip", buf.Bytes())
+		return '_'
+	}, t.Name)
+	if asciiName == "" {
+		asciiName = "template"
+	}
+	asciiFilename := fmt.Sprintf("%s_%d.zip", asciiName, id)
+
+	utf8Filename := fmt.Sprintf("%s_%d.zip", t.Name, id)
+	encodedName := (&url.URL{Path: utf8Filename}).RequestURI()
+
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, asciiFilename, encodedName))
+	c.Data(http.StatusOK, "application/zip", buf.Bytes())
 	}
 }
 

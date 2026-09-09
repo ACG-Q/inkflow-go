@@ -16,6 +16,7 @@ func ListRecordsHandler(db *sql.DB) gin.HandlerFunc {
 		templateID := c.Query("template_id")
 		start := c.Query("start")
 		end := c.Query("end")
+		sort := c.DefaultQuery("sort", "time_desc")
 		if page < 1 {
 			page = 1
 		}
@@ -23,6 +24,11 @@ func ListRecordsHandler(db *sql.DB) gin.HandlerFunc {
 			pageSize = 20
 		}
 		offset := (page - 1) * pageSize
+
+		orderBy := "sr.created_at DESC"
+		if sort == "time_asc" {
+			orderBy = "sr.created_at ASC"
+		}
 
 		var total int64
 		countSQL := "SELECT COUNT(*) FROM signing_records WHERE deleted_at IS NULL"
@@ -52,7 +58,7 @@ func ListRecordsHandler(db *sql.DB) gin.HandlerFunc {
 		if end != "" {
 			dataSQL += " AND sr.created_at <= ?"
 		}
-		dataSQL += " ORDER BY sr.created_at DESC LIMIT ? OFFSET ?"
+		dataSQL += " ORDER BY " + orderBy + " LIMIT ? OFFSET ?"
 		queryArgs := make([]interface{}, len(args))
 		copy(queryArgs, args)
 		queryArgs = append(queryArgs, pageSize, offset)
